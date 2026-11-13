@@ -1,0 +1,42 @@
+name: Expose SSH via Cloudflare Tunnel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  expose-ssh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install cloudflared
+        run: |
+          curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o cloudflared.deb
+          sudo dpkg -i cloudflared.deb
+
+      - name: Setup SSH Server
+        run: |
+          # Configure the runner user's authorized keys with your public key
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/authorized_keys
+          chmod 700 ~/.ssh
+          chmod 600 ~/.ssh/authorized_keys
+
+          # Generate host keys and start the SSH daemon
+          sudo ssh-keygen -A
+          sudo /usr/sbin/sshd -D &
+          echo "SSH server started on port 22"
+
+      - name: Start Cloudflare Tunnel
+        run: |
+          # Use a Quick Tunnel for an ephemeral, public hostname (no Cloudflare account needed)
+          # cloudflared tunnel --url ssh://localhost:22
+
+          # OR, for a persistent named tunnel, use your tunnel token (recommended for repeated use)
+          cloudflared tunnel --no-autoupdate run --token ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }} --url ssh://localhost:22
+
+      - name: Keep job alive
+        run: |
+          echo "SSH is available. The job will remain active for 1 hour."
+          sleep 3600

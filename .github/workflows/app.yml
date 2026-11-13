@@ -1,4 +1,4 @@
-name: Expose SSH via Cloudflare Tunnel
+name: Ubuntu SSH via Cloudflare Quick Tunnel
 
 on:
   workflow_dispatch:
@@ -7,36 +7,53 @@ jobs:
   expose-ssh:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Setup SSH Server
+        run: |
+          mkdir -p ~/.ssh
+          # IMPORTANT: You must put your public SSH key in GitHub Secrets as SSH_PUBLIC_KEY
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/authorized_keys
+          chmod 700 ~/.ssh
+          chmod 600 ~/.ssh/authorized_keys
+
+          # Start the SSH daemon
+          sudo ssh-keygen -A
+          sudo /usr/sbin/sshd -D &
+          echo "SSH server started on port 22"
 
       - name: Install cloudflared
         run: |
           curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o cloudflared.deb
           sudo dpkg -i cloudflared.deb
 
-      - name: Setup SSH Server
+      - name: Start Cloudflare Quick Tunnel
         run: |
-          # Configure the runner user's authorized keys with your public key
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/authorized_keys
-          chmod 700 ~/.ssh
-          chmod 600 ~/.ssh/authorized_keys
-
-          # Generate host keys and start the SSH daemon
-          sudo ssh-keygen -A
-          sudo /usr/sbin/sshd -D &
-          echo "SSH server started on port 22"
-
-      - name: Start Cloudflare Tunnel
-        run: |
-          # Use a Quick Tunnel for an ephemeral, public hostname (no Cloudflare account needed)
-          # cloudflared tunnel --url ssh://localhost:22
-
-          # OR, for a persistent named tunnel, use your tunnel token (recommended for repeated use)
-          cloudflared tunnel --no-autoupdate run --token ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }} --url ssh://localhost:22
+          # Start cloudflared in the background and save logs
+          cloudflared tunnel --url ssh://localhost:22 --logfile /tmp/cf.log &
+          
+          # Wait for the URL to generate
+          sleep 10
+          
+          # Extract the URL from the logs
+          URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' /tmp/cf.log | head -n 1)
+          
+          if [ -z "$URL" ]; then
+            echo "Failed to get URL. Here are the logs:"
+            cat /tmp/cf.log
+            exit 1
+          fi
+          
+          # Extract just the hostname (remove https://)
+          HOSTNAME=$(echo $URL | sed 's|https://||')
+          
+          # Print connection instructions to the GitHub Summary page
+          echo "### 🔑 SSH Connection Info" >> $GITHUB_STEP_SUMMARY
+          echo "Your Ubuntu runner is live!" >> $GITHUB_STEP_SUMMARY
+          echo "Copy and paste this command into your **local terminal**:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "ssh -o ProxyCommand=\"cloudflared access tcp --hostname $HOSTNAME\" runner@localhost" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Keep job alive
         run: |
-          echo "SSH is available. The job will remain active for 1 hour."
+          echo "SSH is active. The job will stay alive for 1 hour."
           sleep 3600

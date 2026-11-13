@@ -1,4 +1,4 @@
-name: Ubuntu SSH via Cloudflare Quick Tunnel
+name: Ubuntu SSH via Cloudflare Quick Tunnel (Password Only)
 
 on:
   workflow_dispatch:
@@ -7,18 +7,21 @@ jobs:
   expose-ssh:
     runs-on: ubuntu-latest
     steps:
-      - name: Setup SSH Server
+      - name: Setup SSH Server (Password Only)
         run: |
-          mkdir -p ~/.ssh
-          # IMPORTANT: You must put your public SSH key in GitHub Secrets as SSH_PUBLIC_KEY
-          echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/authorized_keys
-          chmod 700 ~/.ssh
-          chmod 600 ~/.ssh/authorized_keys
+          # 1. Set password for 'runner' user
+          # Make sure you have a secret named RUNNER_PASSWORD in your repo settings!
+          echo "runner:${{ secrets.RUNNER_PASSWORD }}" | sudo chpasswd
 
-          # Start the SSH daemon
-          sudo ssh-keygen -A
-          sudo /usr/sbin/sshd -D &
-          echo "SSH server started on port 22"
+          # 2. Enable Password Authentication in SSH config
+          # By default, GitHub runners block password logins. We must force it to 'yes'.
+          sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+          sudo sed -i 's/^#\?KbdInteractiveAuthentication.*/KbdInteractiveAuthentication yes/g' /etc/ssh/sshd_config
+          
+          # 3. Restart the SSH service to apply changes
+          sudo systemctl restart ssh
+          
+          echo "✅ SSH server is running with password authentication enabled."
 
       - name: Install cloudflared
         run: |
@@ -37,7 +40,7 @@ jobs:
           URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' /tmp/cf.log | head -n 1)
           
           if [ -z "$URL" ]; then
-            echo "Failed to get URL. Here are the logs:"
+            echo "❌ Failed to get URL. Here are the logs:"
             cat /tmp/cf.log
             exit 1
           fi
@@ -52,6 +55,7 @@ jobs:
           echo '```bash' >> $GITHUB_STEP_SUMMARY
           echo "ssh -o ProxyCommand=\"cloudflared access tcp --hostname $HOSTNAME\" runner@localhost" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "**Password:** Use the password you set in the \`RUNNER_PASSWORD\` secret." >> $GITHUB_STEP_SUMMARY
 
       - name: Keep job alive
         run: |
